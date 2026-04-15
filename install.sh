@@ -56,6 +56,7 @@ copy_if_missing() {
 }
 
 copy_if_missing "${SRC_DIR}/knowledge/README.md" "${VDC_ROOT}/knowledge/README.md"
+copy_if_missing "${SRC_DIR}/examples/mcp.json" "${VDC_ROOT}/mcp/mcp.json"
 copy_if_missing "${SRC_DIR}/examples/mcp.json.example" "${VDC_ROOT}/mcp/mcp.json.example"
 copy_if_missing "${SRC_DIR}/examples/litellm.config.example.yaml" "${VDC_ROOT}/state/litellm.config.example.yaml"
 

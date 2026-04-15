@@ -17,6 +17,9 @@ if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
   exit 0
 fi
 
+MCP_DIR="${VDC_ROOT}/mcp"
+MCP_FILE="${MCP_DIR}/mcp.json"
+
 # Escape value for use in sed replacement
 sed_escape() {
   printf '%s' "$1" | sed 's/[|&\\/]/\\&/g'
@@ -129,72 +132,157 @@ for m in data.get('data', []):
   # else: user typed a model name directly, keep REPLY as-is
 }
 
-# --- Main ---
-echo ""
-echo "=== vdc-tools configuration ==="
-echo ""
-
-CURRENT_URL=""
-CURRENT_TOKEN=""
-CURRENT_MODEL=""
-CURRENT_SMALL_MODEL=""
-
-# Load existing values if editing
-if [ -f "${ENV_FILE}" ]; then
-  echo "Editing existing configuration (${ENV_FILE})"
-  echo "Press Enter to keep current value."
+# --- Subcommand: figma ---
+setup_figma() {
   echo ""
-  CURRENT_URL="$(grep -m1 '^UPSTREAM_BASE_URL=' "${ENV_FILE}" | cut -d= -f2- || true)"
-  CURRENT_TOKEN="$(grep -m1 '^UPSTREAM_TOKEN=' "${ENV_FILE}" | cut -d= -f2- || true)"
-  CURRENT_MODEL="$(grep -m1 '^DEFAULT_MODEL=' "${ENV_FILE}" | cut -d= -f2- || true)"
-  CURRENT_SMALL_MODEL="$(grep -m1 '^SMALL_FAST_MODEL=' "${ENV_FILE}" | cut -d= -f2- || true)"
-else
-  echo "First-time setup."
+  echo "=== Figma MCP configuration ==="
   echo ""
-fi
 
-prompt_value "UPSTREAM_BASE_URL" "${CURRENT_URL}"
-NEW_URL="${REPLY}"
+  mkdir -p "${MCP_DIR}"
 
-prompt_secret "UPSTREAM_TOKEN" "${CURRENT_TOKEN}"
-NEW_TOKEN="${REPLY}"
-
-select_model "${NEW_URL}" "${NEW_TOKEN}" "${CURRENT_MODEL}" "DEFAULT_MODEL"
-NEW_MODEL="${REPLY}"
-
-select_model "${NEW_URL}" "${NEW_TOKEN}" "${CURRENT_SMALL_MODEL}" "SMALL_FAST_MODEL"
-NEW_SMALL_MODEL="${REPLY}"
-
-# Write .env
-if [ -f "${ENV_FILE}" ]; then
-  # Edit mode: update values in existing file
-  sed -i.bak \
-    -e "s|^UPSTREAM_BASE_URL=.*|UPSTREAM_BASE_URL=$(sed_escape "${NEW_URL}")|" \
-    -e "s|^UPSTREAM_TOKEN=.*|UPSTREAM_TOKEN=$(sed_escape "${NEW_TOKEN}")|" \
-    -e "s|^DEFAULT_MODEL=.*|DEFAULT_MODEL=$(sed_escape "${NEW_MODEL}")|" \
-    "${ENV_FILE}"
-  # SMALL_FAST_MODEL may not exist in older .env files — append if missing
-  if grep -q '^SMALL_FAST_MODEL=' "${ENV_FILE}"; then
-    sed -i.bak -e "s|^SMALL_FAST_MODEL=.*|SMALL_FAST_MODEL=$(sed_escape "${NEW_SMALL_MODEL}")|" "${ENV_FILE}"
-    rm -f "${ENV_FILE}.bak"
-  else
-    echo "SMALL_FAST_MODEL=${NEW_SMALL_MODEL}" >> "${ENV_FILE}"
+  # Read current key if mcp.json exists
+  local current_key=""
+  if [ -f "${MCP_FILE}" ]; then
+    if command -v jq >/dev/null 2>&1; then
+      current_key="$(jq -r '.mcpServers.figma.env.FIGMA_API_KEY // ""' "${MCP_FILE}" 2>/dev/null)" || current_key=""
+    elif command -v python3 >/dev/null 2>&1; then
+      current_key="$(python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print(d.get('mcpServers',{}).get('figma',{}).get('env',{}).get('FIGMA_API_KEY',''))
+except: print('')
+" "${MCP_FILE}" 2>/dev/null)" || current_key=""
+    fi
   fi
-  rm -f "${ENV_FILE}.bak"
-else
-  # First-time: generate from template
-  if [ ! -f "${ENV_EXAMPLE}" ]; then
-    echo "Template not found: ${ENV_EXAMPLE}" >&2
+
+  echo "Get your token at: figma.com > Settings > Personal Access Tokens"
+  echo ""
+  prompt_secret "FIGMA_API_KEY" "${current_key}"
+  local figma_key="${REPLY}"
+
+  if [ -z "${figma_key}" ]; then
+    echo "No key provided. Skipping Figma setup."
+    return
+  fi
+
+  # Ensure mcp.json exists with base structure
+  if [ ! -f "${MCP_FILE}" ]; then
+    cp "${REPO_DIR}/examples/mcp.json.example" "${MCP_FILE}"
+  fi
+
+  # Update the Figma API key
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import json, sys
+path = sys.argv[1]
+key = sys.argv[2]
+with open(path, 'r') as f:
+    data = json.load(f)
+servers = data.setdefault('mcpServers', {})
+figma = servers.setdefault('figma', {
+    'type': 'stdio',
+    'command': 'figma-developer-mcp',
+    'args': ['--stdio'],
+    'env': {}
+})
+figma.setdefault('env', {})['FIGMA_API_KEY'] = key
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+    f.write('\n')
+" "${MCP_FILE}" "${figma_key}"
+  elif command -v jq >/dev/null 2>&1; then
+    local tmp
+    tmp="$(mktemp)"
+    jq --arg key "${figma_key}" '.mcpServers.figma.env.FIGMA_API_KEY = $key' "${MCP_FILE}" > "${tmp}" && mv "${tmp}" "${MCP_FILE}"
+  else
+    echo "python3 or jq required to update mcp.json" >&2
     exit 1
   fi
-  mkdir -p "$(dirname "${ENV_FILE}")"
-  sed \
-    -e "s|^UPSTREAM_BASE_URL=.*|UPSTREAM_BASE_URL=$(sed_escape "${NEW_URL}")|" \
-    -e "s|^UPSTREAM_TOKEN=.*|UPSTREAM_TOKEN=$(sed_escape "${NEW_TOKEN}")|" \
-    -e "s|^DEFAULT_MODEL=.*|DEFAULT_MODEL=$(sed_escape "${NEW_MODEL}")|" \
-    -e "s|^SMALL_FAST_MODEL=.*|SMALL_FAST_MODEL=$(sed_escape "${NEW_SMALL_MODEL}")|" \
-    "${ENV_EXAMPLE}" > "${ENV_FILE}"
-fi
 
-echo ""
-echo "Configuration saved to ${ENV_FILE}"
+  echo ""
+  echo "Figma configured in ${MCP_FILE}"
+  echo "Restart vdc-claude to apply."
+}
+
+# --- Subcommand: main (LLM backend) ---
+setup_main() {
+  echo ""
+  echo "=== vdc-tools configuration ==="
+  echo ""
+
+  CURRENT_URL=""
+  CURRENT_TOKEN=""
+  CURRENT_MODEL=""
+  CURRENT_SMALL_MODEL=""
+
+  # Load existing values if editing
+  if [ -f "${ENV_FILE}" ]; then
+    echo "Editing existing configuration (${ENV_FILE})"
+    echo "Press Enter to keep current value."
+    echo ""
+    CURRENT_URL="$(grep -m1 '^UPSTREAM_BASE_URL=' "${ENV_FILE}" | cut -d= -f2- || true)"
+    CURRENT_TOKEN="$(grep -m1 '^UPSTREAM_TOKEN=' "${ENV_FILE}" | cut -d= -f2- || true)"
+    CURRENT_MODEL="$(grep -m1 '^DEFAULT_MODEL=' "${ENV_FILE}" | cut -d= -f2- || true)"
+    CURRENT_SMALL_MODEL="$(grep -m1 '^SMALL_FAST_MODEL=' "${ENV_FILE}" | cut -d= -f2- || true)"
+  else
+    echo "First-time setup."
+    echo ""
+  fi
+
+  prompt_value "UPSTREAM_BASE_URL" "${CURRENT_URL}"
+  NEW_URL="${REPLY}"
+
+  prompt_secret "UPSTREAM_TOKEN" "${CURRENT_TOKEN}"
+  NEW_TOKEN="${REPLY}"
+
+  select_model "${NEW_URL}" "${NEW_TOKEN}" "${CURRENT_MODEL}" "DEFAULT_MODEL"
+  NEW_MODEL="${REPLY}"
+
+  select_model "${NEW_URL}" "${NEW_TOKEN}" "${CURRENT_SMALL_MODEL}" "SMALL_FAST_MODEL"
+  NEW_SMALL_MODEL="${REPLY}"
+
+  # Write .env
+  if [ -f "${ENV_FILE}" ]; then
+    # Edit mode: update values in existing file
+    sed -i.bak \
+      -e "s|^UPSTREAM_BASE_URL=.*|UPSTREAM_BASE_URL=$(sed_escape "${NEW_URL}")|" \
+      -e "s|^UPSTREAM_TOKEN=.*|UPSTREAM_TOKEN=$(sed_escape "${NEW_TOKEN}")|" \
+      -e "s|^DEFAULT_MODEL=.*|DEFAULT_MODEL=$(sed_escape "${NEW_MODEL}")|" \
+      "${ENV_FILE}"
+    # SMALL_FAST_MODEL may not exist in older .env files — append if missing
+    if grep -q '^SMALL_FAST_MODEL=' "${ENV_FILE}"; then
+      sed -i.bak -e "s|^SMALL_FAST_MODEL=.*|SMALL_FAST_MODEL=$(sed_escape "${NEW_SMALL_MODEL}")|" "${ENV_FILE}"
+      rm -f "${ENV_FILE}.bak"
+    else
+      echo "SMALL_FAST_MODEL=${NEW_SMALL_MODEL}" >> "${ENV_FILE}"
+    fi
+    rm -f "${ENV_FILE}.bak"
+  else
+    # First-time: generate from template
+    if [ ! -f "${ENV_EXAMPLE}" ]; then
+      echo "Template not found: ${ENV_EXAMPLE}" >&2
+      exit 1
+    fi
+    mkdir -p "$(dirname "${ENV_FILE}")"
+    sed \
+      -e "s|^UPSTREAM_BASE_URL=.*|UPSTREAM_BASE_URL=$(sed_escape "${NEW_URL}")|" \
+      -e "s|^UPSTREAM_TOKEN=.*|UPSTREAM_TOKEN=$(sed_escape "${NEW_TOKEN}")|" \
+      -e "s|^DEFAULT_MODEL=.*|DEFAULT_MODEL=$(sed_escape "${NEW_MODEL}")|" \
+      -e "s|^SMALL_FAST_MODEL=.*|SMALL_FAST_MODEL=$(sed_escape "${NEW_SMALL_MODEL}")|" \
+      "${ENV_EXAMPLE}" > "${ENV_FILE}"
+  fi
+
+  echo ""
+  echo "Configuration saved to ${ENV_FILE}"
+}
+
+# --- Route subcommand ---
+case "${1:-}" in
+  figma)
+    setup_figma
+    ;;
+  *)
+    setup_main
+    ;;
+esac
