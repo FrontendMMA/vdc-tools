@@ -12,6 +12,11 @@ VDC_ROOT="${VDC_ROOT:-${HOME}/.vdc-tools}"
 ENV_FILE="${VDC_ROOT}/.env"
 ENV_EXAMPLE="${REPO_DIR}/.env.example"
 
+if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
+  echo "vdc-setup $(cat "${REPO_DIR}/VERSION") (vdc-tools)"
+  exit 0
+fi
+
 # Escape value for use in sed replacement
 sed_escape() {
   printf '%s' "$1" | sed 's/[|&\\/]/\\&/g'

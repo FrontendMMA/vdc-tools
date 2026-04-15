@@ -63,6 +63,10 @@ while [[ $# -gt 0 ]]; do
       PRINT_CONFIG="1"
       shift
       ;;
+    --version|-V)
+      echo "vdc-ralphex $(cat "${REPO_DIR}/VERSION") (vdc-tools)"
+      exit 0
+      ;;
     -h|--help)
       usage
       exit 0

@@ -38,6 +38,10 @@ while [[ $# -gt 0 ]]; do
       DEBUG_FLAG="1"
       shift
       ;;
+    --version|-V)
+      echo "vdc-litellm $(cat "${VDC_ROOT}/src/VERSION" 2>/dev/null || echo "unknown") (vdc-tools)"
+      exit 0
+      ;;
     -h|--help)
       usage
       exit 0

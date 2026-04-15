@@ -3,6 +3,11 @@ set -euo pipefail
 
 SRC_DIR="${HOME}/.vdc-tools/src"
 
+if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
+  echo "vdc-update $(cat "${SRC_DIR}/VERSION" 2>/dev/null || echo "unknown") (vdc-tools)"
+  exit 0
+fi
+
 if [ -d "${SRC_DIR}/.git" ]; then
   echo "Updating vdc-tools..."
   git -C "${SRC_DIR}" pull --ff-only
