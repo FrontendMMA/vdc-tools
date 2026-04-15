@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SRC_DIR="${HOME}/.vdc-tools/src"
+
+if [ -d "${SRC_DIR}/.git" ]; then
+  echo "Updating vdc-tools..."
+  git -C "${SRC_DIR}" pull --ff-only
+else
+  echo "Repository not found at ${SRC_DIR}. Reinstall:" >&2
+  echo "  curl -sL https://raw.githubusercontent.com/FrontendMMA/vdc-tools/main/install.sh | bash" >&2
+  exit 1
+fi
+
+echo "Removing old Docker image..."
+docker rmi vdc-tools-claude-runner:latest 2>/dev/null || true
+
+echo "Done. Image will rebuild on next run."

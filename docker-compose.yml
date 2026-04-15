@@ -1,0 +1,88 @@
+services:
+  proxy:
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    container_name: vdc-tools-claude-proxy
+    restart: unless-stopped
+    environment:
+      PORT: ${PROXY_PORT:-8080}
+      UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL}
+      UPSTREAM_TOKEN: ${UPSTREAM_TOKEN}
+      STRIP_CONTEXT_MANAGEMENT: ${STRIP_CONTEXT_MANAGEMENT:-true}
+      STRIP_THINKING: ${STRIP_THINKING:-false}
+      STRIP_MCP_SERVERS: ${STRIP_MCP_SERVERS:-false}
+      STRIP_CONTAINER_FIELD: ${STRIP_CONTAINER_FIELD:-false}
+      MAX_TOKENS_CAP: ${MAX_TOKENS_CAP:-}
+      REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-300000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    expose:
+      - "${PROXY_PORT:-8080}"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 8080) + '/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  claude-runner:
+    build:
+      context: ./claude-runner
+      dockerfile: Dockerfile
+      args:
+        CLAUDE_UID: ${HOST_UID:-1001}
+        CLAUDE_GID: ${HOST_GID:-1001}
+    image: vdc-tools-claude-runner:latest
+    depends_on:
+      proxy:
+        condition: service_healthy
+    working_dir: /workspace
+    environment:
+      ANTHROPIC_BASE_URL: http://proxy:${PROXY_PORT:-8080}
+      ANTHROPIC_AUTH_TOKEN: ${CLAUDE_GATEWAY_TOKEN:-dummy}
+      ANTHROPIC_MODEL: ${DEFAULT_MODEL:-}
+      ANTHROPIC_SMALL_FAST_MODEL: ${SMALL_FAST_MODEL:-}
+      CLAUDE_CONFIG_DIR: /claude-config
+      CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1"
+      CHROME_PATH: /usr/bin/chromium
+      CHROMIUM_PATH: /usr/bin/chromium
+    volumes:
+      - ${PROJECT_DIR}:/workspace
+      - ${PROJECT_CLAUDE_DIR}:/claude-config
+      - ${KNOWLEDGE_DIR}:/knowledge:ro
+      - ${MCP_DIR}:/mcp
+      - ${PNPM_STORE_DIR}:/pnpm-store
+    stdin_open: true
+    tty: true
+
+  ralphex-runner:
+    build:
+      context: ./claude-runner
+      dockerfile: Dockerfile
+      args:
+        CLAUDE_UID: ${HOST_UID:-1001}
+        CLAUDE_GID: ${HOST_GID:-1001}
+    image: vdc-tools-claude-runner:latest
+    depends_on:
+      proxy:
+        condition: service_healthy
+    entrypoint: ["ralphex"]
+    working_dir: /workspace
+    environment:
+      ANTHROPIC_BASE_URL: http://proxy:${PROXY_PORT:-8080}
+      ANTHROPIC_AUTH_TOKEN: ${CLAUDE_GATEWAY_TOKEN:-dummy}
+      ANTHROPIC_MODEL: ${DEFAULT_MODEL:-}
+      ANTHROPIC_SMALL_FAST_MODEL: ${SMALL_FAST_MODEL:-}
+      CLAUDE_CONFIG_DIR: /claude-config
+      CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1"
+      CHROME_PATH: /usr/bin/chromium
+      CHROMIUM_PATH: /usr/bin/chromium
+    volumes:
+      - ${PROJECT_DIR}:/workspace
+      - ${PROJECT_CLAUDE_DIR}:/claude-config
+      - ${KNOWLEDGE_DIR}:/knowledge:ro
+      - ${MCP_DIR}:/mcp
+      - ${PNPM_STORE_DIR}:/pnpm-store
+      - ${RALPHEX_CONFIG_DIR:-.ralphex-config-placeholder}:/home/claude/.config/ralphex
+    stdin_open: true
+    tty: true

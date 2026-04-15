@@ -1,0 +1,293 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve symlinks (npm global installs use symlinks for bin/)
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "${SCRIPT_PATH}" ]; do
+  LINK_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+  SCRIPT_PATH="$(readlink "${SCRIPT_PATH}")"
+  [[ "${SCRIPT_PATH}" != /* ]] && SCRIPT_PATH="${LINK_DIR}/${SCRIPT_PATH}"
+done
+REPO_DIR="$(cd "$(dirname "${SCRIPT_PATH}")/.." && pwd)"
+VDC_ROOT="${VDC_ROOT:-${HOME}/.vdc-tools}"
+ENV_FILE="${VDC_ROOT}/.env"
+PROJECTS_DIR="${VDC_ROOT}/projects"
+KNOWLEDGE_DIR_DEFAULT="${VDC_ROOT}/knowledge"
+MCP_DIR_DEFAULT="${VDC_ROOT}/mcp"
+COMPOSE_PROJECT_NAME="vdc-tools"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  vdc-claude [--model NAME] [--yolo] [--project-dir PATH] [--print-config] [extra Claude args...]
+
+Examples:
+  vdc-claude --model Qwen3.5-35B-A3B
+  vdc-claude --model Qwen3.5-35B-A3B --yolo
+  vdc-claude --continue
+EOF
+}
+
+MODEL=""
+YOLO="0"
+PROJECT_DIR=""
+PRINT_CONFIG="0"
+EXTRA_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model)
+      MODEL="${2:-}"
+      shift 2
+      ;;
+    --project-dir)
+      PROJECT_DIR="${2:-}"
+      shift 2
+      ;;
+    --yolo)
+      YOLO="1"
+      shift
+      ;;
+    --print-config)
+      PRINT_CONFIG="1"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      EXTRA_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker is required."
+  exit 1
+fi
+
+if [ ! -f "${ENV_FILE}" ]; then
+  echo "Missing ${ENV_FILE}. Run ./install first."
+  exit 1
+fi
+
+set -a
+source "${ENV_FILE}"
+set +a
+
+if [ -z "${MODEL}" ] && [ -n "${DEFAULT_MODEL:-}" ]; then
+  MODEL="${DEFAULT_MODEL}"
+fi
+
+PROJECT_DIR="${PROJECT_DIR:-$PWD}"
+if command -v python3 >/dev/null 2>&1; then
+  PROJECT_DIR="$(python3 - <<'PY' "$PROJECT_DIR"
+import os,sys
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+else
+  PROJECT_DIR="$(cd "${PROJECT_DIR}" && pwd -P)"
+fi
+
+if [ -d "${PROJECT_DIR}/.git" ] || git -C "${PROJECT_DIR}" rev-parse --show-toplevel >/dev/null 2>&1; then
+  if ROOT="$(git -C "${PROJECT_DIR}" rev-parse --show-toplevel 2>/dev/null)"; then
+    PROJECT_DIR="${ROOT}"
+  fi
+fi
+
+mkdir -p "${PROJECTS_DIR}" "${KNOWLEDGE_DIR_DEFAULT}" "${MCP_DIR_DEFAULT}"
+
+project_hash() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY' "$1"
+import hashlib,sys
+print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest()[:16])
+PY
+  else
+    echo "$1" | shasum -a 256 | awk '{print substr($1,1,16)}'
+  fi
+}
+
+PROJECT_ID="$(project_hash "${PROJECT_DIR}")"
+PROJECT_HOME="${PROJECTS_DIR}/${PROJECT_ID}"
+PROJECT_CLAUDE_DIR="${PROJECT_HOME}/claude-config"
+PROJECT_RALPHEX_DIR="${PROJECT_HOME}/ralphex-config"
+mkdir -p "${PROJECT_CLAUDE_DIR}" "${PROJECT_RALPHEX_DIR}"
+
+KNOWLEDGE_DIR="${KNOWLEDGE_DIR:-${KNOWLEDGE_DIR_DEFAULT}}"
+MCP_DIR="${MCP_DIR:-${MCP_DIR_DEFAULT}}"
+RALPHEX_CONFIG_DIR="${PROJECT_RALPHEX_DIR}"
+PNPM_STORE_DIR="${PNPM_STORE_DIR:-${VDC_ROOT}/pnpm-store}"
+mkdir -p "${KNOWLEDGE_DIR}" "${MCP_DIR}" "${PNPM_STORE_DIR}"
+
+ensure_settings() {
+  local settings="${PROJECT_CLAUDE_DIR}/settings.json"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY' "${settings}" "${PROJECT_DIR}"
+import json, os, sys
+settings_path = sys.argv[1]
+project_dir = sys.argv[2]
+default_deny_rules = [
+    "Read(./.env)",
+    "Read(./.env.*)",
+    "Read(./.npmrc)",
+    "Read(./.pypirc)",
+    "Read(./.netrc)",
+    "Read(./secrets/**)",
+    "Read(./config/credentials.json)",
+    "Read(./**/id_rsa)",
+    "Read(./**/id_dsa)",
+    "Read(./**/id_ecdsa)",
+    "Read(./**/id_ed25519)",
+    "Read(./**/*.pem)",
+    "Read(./**/*.key)",
+    "Read(./**/*.p8)",
+    "Read(./**/*.p12)",
+    "Read(./**/*.pfx)",
+    "Read(./**/*.crt)",
+    "Read(./**/*.cer)",
+    "Read(./**/*.der)",
+    "Read(./**/*.jks)",
+    "Read(./**/*.keystore)",
+    "Read(./**/*.mobileprovision)",
+]
+data = {}
+if os.path.exists(settings_path):
+    try:
+        with open(settings_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+env = data.setdefault("env", {})
+env.setdefault("CLAUDE_CODE_ENABLE_TELEMETRY", "0")
+env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+env.setdefault("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
+env.setdefault("CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "1")
+permissions = data.setdefault("permissions", {})
+permissions.setdefault("defaultMode", "default")
+deny = permissions.get("deny", [])
+if not isinstance(deny, list):
+    deny = [deny] if deny else []
+for rule in default_deny_rules:
+    if rule not in deny:
+        deny.append(rule)
+permissions["deny"] = deny
+data.setdefault("includeCoAuthoredBy", False)
+data.setdefault("projectName", os.path.basename(project_dir.rstrip("/")) or "project")
+with open(settings_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+PY
+  else
+    if [ ! -f "${settings}" ]; then
+      cat > "${settings}" <<'JSON'
+{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "0",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+    "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1"
+  },
+  "permissions": {
+    "defaultMode": "default",
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./.npmrc)",
+      "Read(./.pypirc)",
+      "Read(./.netrc)",
+      "Read(./secrets/**)",
+      "Read(./config/credentials.json)",
+      "Read(./**/id_rsa)",
+      "Read(./**/id_dsa)",
+      "Read(./**/id_ecdsa)",
+      "Read(./**/id_ed25519)",
+      "Read(./**/*.pem)",
+      "Read(./**/*.key)",
+      "Read(./**/*.p8)",
+      "Read(./**/*.p12)",
+      "Read(./**/*.pfx)",
+      "Read(./**/*.crt)",
+      "Read(./**/*.cer)",
+      "Read(./**/*.der)",
+      "Read(./**/*.jks)",
+      "Read(./**/*.keystore)",
+      "Read(./**/*.mobileprovision)"
+    ]
+  },
+  "includeCoAuthoredBy": false
+}
+JSON
+    fi
+  fi
+}
+
+ensure_settings
+
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
+
+export PROJECT_DIR
+export PROJECT_CLAUDE_DIR
+export KNOWLEDGE_DIR
+export MCP_DIR
+export RALPHEX_CONFIG_DIR
+export PNPM_STORE_DIR
+export COMPOSE_PROJECT_NAME
+export HOST_UID
+export HOST_GID
+
+if [ "${PRINT_CONFIG}" = "1" ]; then
+  cat <<EOF
+PROJECT_DIR=${PROJECT_DIR}
+PROJECT_ID=${PROJECT_ID}
+PROJECT_CLAUDE_DIR=${PROJECT_CLAUDE_DIR}
+KNOWLEDGE_DIR=${KNOWLEDGE_DIR}
+MCP_DIR=${MCP_DIR}
+COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
+EOF
+  exit 0
+fi
+
+compose() {
+  docker compose -f "${REPO_DIR}/docker-compose.yml" "$@"
+}
+
+if ! docker ps --filter "name=^vdc-tools-claude-proxy$" --format '{{.Names}}' | grep -qx 'vdc-tools-claude-proxy'; then
+  compose up -d --build proxy
+else
+  compose up -d proxy >/dev/null
+fi
+
+# Ensure the runner image exists and matches the host UID. Rebuild if not.
+if ! docker image inspect vdc-tools-claude-runner:latest >/dev/null 2>&1; then
+  compose build claude-runner
+else
+  CURRENT_UID="$(docker run --rm --entrypoint id vdc-tools-claude-runner:latest -u 2>/dev/null || echo "")"
+  if [ "${CURRENT_UID}" != "${HOST_UID}" ]; then
+    compose build claude-runner
+  fi
+fi
+
+RUN_ARGS=(run --rm --service-ports=false claude-runner --add-dir /knowledge)
+
+if [ -f "${MCP_DIR}/mcp.json" ]; then
+  RUN_ARGS+=(--mcp-config /mcp/mcp.json)
+fi
+
+if [ -n "${MODEL}" ]; then
+  RUN_ARGS+=(--model "${MODEL}")
+fi
+
+if [ "${YOLO}" = "1" ]; then
+  RUN_ARGS+=(--dangerously-skip-permissions)
+fi
+
+if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
+  RUN_ARGS+=("${EXTRA_ARGS[@]}")
+fi
+
+compose "${RUN_ARGS[@]}"

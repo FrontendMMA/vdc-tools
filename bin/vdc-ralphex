@@ -1,0 +1,229 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve symlinks (npm global installs use symlinks for bin/)
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "${SCRIPT_PATH}" ]; do
+  LINK_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+  SCRIPT_PATH="$(readlink "${SCRIPT_PATH}")"
+  [[ "${SCRIPT_PATH}" != /* ]] && SCRIPT_PATH="${LINK_DIR}/${SCRIPT_PATH}"
+done
+REPO_DIR="$(cd "$(dirname "${SCRIPT_PATH}")/.." && pwd)"
+VDC_ROOT="${VDC_ROOT:-${HOME}/.vdc-tools}"
+ENV_FILE="${VDC_ROOT}/.env"
+PROJECTS_DIR="${VDC_ROOT}/projects"
+KNOWLEDGE_DIR_DEFAULT="${VDC_ROOT}/knowledge"
+MCP_DIR_DEFAULT="${VDC_ROOT}/mcp"
+COMPOSE_PROJECT_NAME="vdc-tools"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  vdc-ralphex [options] <plan-file> [ralphex args...]
+  vdc-ralphex [options] all [app-slug] [run-all-plans args...]
+
+Single plan:
+  vdc-ralphex docs/plans/feature.md
+  vdc-ralphex docs/plans/feature.md --tasks-only
+  vdc-ralphex docs/plans/feature.md --review
+
+Batch (all plans):
+  vdc-ralphex all                        # all unfinished plans
+  vdc-ralphex all --no-external          # without external review
+  vdc-ralphex all demo-site              # plans for app-slug
+  vdc-ralphex all demo-site --fast       # app-slug, tasks only
+
+Options:
+  --model NAME         Override the default model
+  --project-dir PATH   Specify the project directory
+  --print-config       Print derived paths and exit
+  -h, --help           Show this help
+
+The "all" mode runs scripts/run-all-plans.sh inside the container.
+EOF
+}
+
+MODEL=""
+PROJECT_DIR=""
+PRINT_CONFIG="0"
+ALL_MODE="0"
+PASSTHROUGH_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model)
+      MODEL="${2:-}"
+      shift 2
+      ;;
+    --project-dir)
+      PROJECT_DIR="${2:-}"
+      shift 2
+      ;;
+    --print-config)
+      PRINT_CONFIG="1"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    all)
+      ALL_MODE="1"
+      shift
+      # Everything after "all" goes to run-all-plans.sh
+      PASSTHROUGH_ARGS+=("$@")
+      break
+      ;;
+    *)
+      PASSTHROUGH_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker is required."
+  exit 1
+fi
+
+if [ ! -f "${ENV_FILE}" ]; then
+  echo "Missing ${ENV_FILE}. Run ./install first."
+  exit 1
+fi
+
+set -a
+source "${ENV_FILE}"
+set +a
+
+if [ -z "${MODEL}" ] && [ -n "${DEFAULT_MODEL:-}" ]; then
+  MODEL="${DEFAULT_MODEL}"
+fi
+
+PROJECT_DIR="${PROJECT_DIR:-$PWD}"
+if command -v python3 >/dev/null 2>&1; then
+  PROJECT_DIR="$(python3 - <<'PY' "$PROJECT_DIR"
+import os,sys
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+else
+  PROJECT_DIR="$(cd "${PROJECT_DIR}" && pwd -P)"
+fi
+
+if [ -d "${PROJECT_DIR}/.git" ] || git -C "${PROJECT_DIR}" rev-parse --show-toplevel >/dev/null 2>&1; then
+  if ROOT="$(git -C "${PROJECT_DIR}" rev-parse --show-toplevel 2>/dev/null)"; then
+    PROJECT_DIR="${ROOT}"
+  fi
+fi
+
+mkdir -p "${PROJECTS_DIR}" "${KNOWLEDGE_DIR_DEFAULT}" "${MCP_DIR_DEFAULT}"
+
+project_hash() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY' "$1"
+import hashlib,sys
+print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest()[:16])
+PY
+  else
+    echo "$1" | shasum -a 256 | awk '{print substr($1,1,16)}'
+  fi
+}
+
+PROJECT_ID="$(project_hash "${PROJECT_DIR}")"
+PROJECT_HOME="${PROJECTS_DIR}/${PROJECT_ID}"
+PROJECT_CLAUDE_DIR="${PROJECT_HOME}/claude-config"
+PROJECT_RALPHEX_DIR="${PROJECT_HOME}/ralphex-config"
+mkdir -p "${PROJECT_CLAUDE_DIR}" "${PROJECT_RALPHEX_DIR}"
+
+KNOWLEDGE_DIR="${KNOWLEDGE_DIR:-${KNOWLEDGE_DIR_DEFAULT}}"
+MCP_DIR="${MCP_DIR:-${MCP_DIR_DEFAULT}}"
+RALPHEX_CONFIG_DIR="${PROJECT_RALPHEX_DIR}"
+PNPM_STORE_DIR="${PNPM_STORE_DIR:-${VDC_ROOT}/pnpm-store}"
+mkdir -p "${KNOWLEDGE_DIR}" "${MCP_DIR}" "${PNPM_STORE_DIR}"
+
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
+
+export PROJECT_DIR
+export PROJECT_CLAUDE_DIR
+export KNOWLEDGE_DIR
+export MCP_DIR
+export RALPHEX_CONFIG_DIR
+export PNPM_STORE_DIR
+export COMPOSE_PROJECT_NAME
+export HOST_UID
+export HOST_GID
+
+if [ "${PRINT_CONFIG}" = "1" ]; then
+  cat <<EOF
+PROJECT_DIR=${PROJECT_DIR}
+PROJECT_ID=${PROJECT_ID}
+PROJECT_CLAUDE_DIR=${PROJECT_CLAUDE_DIR}
+KNOWLEDGE_DIR=${KNOWLEDGE_DIR}
+MCP_DIR=${MCP_DIR}
+RALPHEX_CONFIG_DIR=${RALPHEX_CONFIG_DIR}
+COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
+EOF
+  exit 0
+fi
+
+compose() {
+  docker compose -f "${REPO_DIR}/docker-compose.yml" "$@"
+}
+
+if ! docker ps --filter "name=^vdc-tools-claude-proxy$" --format '{{.Names}}' | grep -qx 'vdc-tools-claude-proxy'; then
+  compose up -d --build proxy
+else
+  compose up -d proxy >/dev/null
+fi
+
+# Ensure the runner image exists and matches the host UID. Rebuild if not.
+if ! docker image inspect vdc-tools-claude-runner:latest >/dev/null 2>&1; then
+  compose build claude-runner
+else
+  CURRENT_UID="$(docker run --rm --entrypoint id vdc-tools-claude-runner:latest -u 2>/dev/null || echo "")"
+  if [ "${CURRENT_UID}" != "${HOST_UID}" ]; then
+    compose build claude-runner
+  fi
+fi
+
+RUN_ARGS=(run --rm)
+
+if [ -n "${MODEL}" ]; then
+  RUN_ARGS+=(-e "ANTHROPIC_MODEL=${MODEL}")
+fi
+
+if [ "${ALL_MODE}" = "1" ]; then
+  # Batch mode: run run-all-plans (built into the image)
+  RUN_ARGS+=(--entrypoint run-all-plans ralphex-runner)
+
+  # Parse passthrough: first non-flag arg is app-slug, rest are flags
+  APP_SLUG=""
+  RUN_ALL_FLAGS=()
+  for arg in "${PASSTHROUGH_ARGS[@]}"; do
+    if [ -z "${APP_SLUG}" ] && [[ "${arg}" != -* ]]; then
+      APP_SLUG="${arg}"
+    else
+      RUN_ALL_FLAGS+=("${arg}")
+    fi
+  done
+
+  if [ -n "${APP_SLUG}" ]; then
+    RUN_ARGS+=(--app-slug "${APP_SLUG}")
+  else
+    RUN_ARGS+=(--all)
+  fi
+
+  if [ ${#RUN_ALL_FLAGS[@]} -gt 0 ]; then
+    RUN_ARGS+=("${RUN_ALL_FLAGS[@]}")
+  fi
+else
+  # Single plan mode: run ralphex directly
+  RUN_ARGS+=(ralphex-runner)
+
+  if [ ${#PASSTHROUGH_ARGS[@]} -gt 0 ]; then
+    RUN_ARGS+=("${PASSTHROUGH_ARGS[@]}")
+  fi
+fi
+
+compose "${RUN_ARGS[@]}"

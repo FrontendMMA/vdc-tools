@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VDC_ROOT="${VDC_ROOT:-${HOME}/.vdc-tools}"
+STATE_DIR="${VDC_ROOT}/state"
+CONFIG_PATH="${LITELLM_CONFIG:-${STATE_DIR}/litellm.config.yaml}"
+HOST="${LITELLM_HOST:-127.0.0.1}"
+PORT="${LITELLM_PORT:-4000}"
+DEBUG_FLAG="${LITELLM_DEBUG:-0}"
+
+usage() {
+  cat <<EOF
+Usage:
+  vdc-litellm [--config PATH] [--host HOST] [--port PORT] [--debug]
+
+Defaults:
+  config: ${CONFIG_PATH}
+  host:   ${HOST}
+  port:   ${PORT}
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --config)
+      CONFIG_PATH="${2:-}"
+      shift 2
+      ;;
+    --host)
+      HOST="${2:-}"
+      shift 2
+      ;;
+    --port)
+      PORT="${2:-}"
+      shift 2
+      ;;
+    --debug)
+      DEBUG_FLAG="1"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [ ! -f "${CONFIG_PATH}" ]; then
+  echo "Missing LiteLLM config: ${CONFIG_PATH}" >&2
+  if [ -f "${STATE_DIR}/litellm.config.example.yaml" ]; then
+    echo "Start from the example:" >&2
+    echo "  cp ${STATE_DIR}/litellm.config.example.yaml ${STATE_DIR}/litellm.config.yaml" >&2
+  fi
+  exit 1
+fi
+
+find_litellm() {
+  if command -v litellm >/dev/null 2>&1; then
+    command -v litellm
+    return 0
+  fi
+
+  if [ -x "${STATE_DIR}/litellm-venv/bin/litellm" ]; then
+    echo "${STATE_DIR}/litellm-venv/bin/litellm"
+    return 0
+  fi
+
+  return 1
+}
+
+if ! LITELLM_BIN="$(find_litellm)"; then
+  echo "LiteLLM is not installed." >&2
+  echo "Install it in PATH, or create ${STATE_DIR}/litellm-venv and install litellm[proxy] there." >&2
+  echo "Example:" >&2
+  echo "  python3.11 -m venv ${STATE_DIR}/litellm-venv" >&2
+  echo "  ${STATE_DIR}/litellm-venv/bin/pip install 'litellm[proxy]'" >&2
+  exit 1
+fi
+
+ARGS=(--config "${CONFIG_PATH}" --host "${HOST}" --port "${PORT}")
+if [ "${DEBUG_FLAG}" = "1" ]; then
+  ARGS+=(--detailed_debug)
+fi
+
+echo "Starting LiteLLM with ${CONFIG_PATH} on ${HOST}:${PORT}" >&2
+exec "${LITELLM_BIN}" "${ARGS[@]}"

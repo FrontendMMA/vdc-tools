@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest"
+      ],
+      "env": {
+        "CHROME_PATH": "/usr/bin/chromium"
+      }
+    },
+    "figma": {
+      "type": "stdio",
+      "command": "figma-developer-mcp",
+      "args": ["--stdio"],
+      "env": {
+        "FIGMA_API_KEY": "figd_YOUR_TOKEN_HERE"
+      }
+    }
+  }
+}
