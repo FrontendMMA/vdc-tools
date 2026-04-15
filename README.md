@@ -83,10 +83,21 @@ Set in `~/.vdc-tools/.env` or via `vdc-setup`:
 
 ```bash
 DEFAULT_MODEL=Qwen3.5-35B-A3B       # main model (used with --model)
-SMALL_FAST_MODEL=qwen3:8b            # fast model for background requests
+SMALL_FAST_MODEL=qwen3dot5-27b       # fast model for background requests
 ```
 
 Claude Code sends background requests (tab completion, file summaries) to `claude-haiku-4-5-20251001`. Set `SMALL_FAST_MODEL` to map these to a fast local model.
+
+### Token limits
+
+Per-model token caps keep background responses fast without limiting the main model:
+
+```bash
+MAX_TOKENS_CAP=                      # no cap for main model
+SMALL_MAX_TOKENS_CAP=512             # short responses from fast model
+```
+
+The proxy applies `SMALL_MAX_TOKENS_CAP` to requests matching `SMALL_FAST_MODEL`, and `MAX_TOKENS_CAP` to everything else.
 
 ## Usage
 
@@ -116,25 +127,11 @@ vdc-ralphex all my-app --no-external
 
 `figma-developer-mcp` is pre-installed in the Docker image. To enable:
 
-1. Get a Personal Access Token: `figma.com` > Settings > Personal Access Tokens.
-2. Create `~/.vdc-tools/mcp/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "figma": {
-      "type": "stdio",
-      "command": "figma-developer-mcp",
-      "args": ["--stdio"],
-      "env": {
-        "FIGMA_API_KEY": "figd_YOUR_TOKEN"
-      }
-    }
-  }
-}
+```bash
+vdc-setup figma
 ```
 
-3. Restart `vdc-claude`.
+This prompts for your Figma Personal Access Token and saves it to `~/.vdc-tools/mcp/mcp.json`. Restart `vdc-claude` to apply.
 
 ## Project isolation
 
@@ -187,4 +184,5 @@ vdc-claude / vdc-ralphex
 
 - `qwen3`-family models work better for tool-use than `llama3`.
 - Set `SMALL_FAST_MODEL` for background requests (see [Models](#models) section).
-- If a model loops in long reasoning, try `MAX_TOKENS_CAP=256` in `.env`.
+- Use `SMALL_MAX_TOKENS_CAP=512` to keep fast model responses short.
+- If the main model loops in long reasoning, try `MAX_TOKENS_CAP=256` in `.env`.

@@ -21,7 +21,7 @@ There are no tests or linters configured in this project.
 ## Architecture
 
 ```
-bin/                  # Bash CLI entry points (vdc-claude, vdc-ralphex, vdc-litellm, vdc-update)
+bin/                  # Bash CLI entry points (vdc-claude, vdc-setup, vdc-ralphex, vdc-litellm, vdc-update)
 proxy/                # Express API proxy (server.js) — sanitizes requests, caps tokens, forwards to upstream LLM
 claude-runner/        # Dockerfile for the Claude CLI container (includes system tools, ralphex, Chromium)
 install.sh            # Unified bash installer — creates ~/.vdc-tools/ structure, symlinks, copies .env template
@@ -53,4 +53,6 @@ Two Docker services defined in `docker-compose.yml`:
 - Project ID is a stable hash of the absolute project path (git root when available)
 - Docker containers match host UID/GID for file ownership compatibility
 - Proxy strips unsupported fields from requests (thinking, context_management, MCP servers) — controlled by `STRIP_*` env vars
+- Proxy applies per-model token caps: `MAX_TOKENS_CAP` for main model, `SMALL_MAX_TOKENS_CAP` for `SMALL_FAST_MODEL`
+- `vdc-setup` configures LLM backend; `vdc-setup figma` configures Figma MCP
 - `settings.json` generated per-project includes security deny rules blocking `.env`, credentials, and key files

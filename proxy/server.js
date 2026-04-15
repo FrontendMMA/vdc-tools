@@ -10,6 +10,8 @@ const UPSTREAM_TOKEN = process.env.UPSTREAM_TOKEN;
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 300000);
 const LOG_LEVEL = process.env.LOG_LEVEL || "info";
 const MAX_TOKENS_CAP = Number(process.env.MAX_TOKENS_CAP || 0);
+const SMALL_MAX_TOKENS_CAP = Number(process.env.SMALL_MAX_TOKENS_CAP || 0);
+const SMALL_FAST_MODEL = process.env.SMALL_FAST_MODEL || "";
 
 const STRIP_CONTEXT_MANAGEMENT = String(process.env.STRIP_CONTEXT_MANAGEMENT || "true") === "true";
 const STRIP_THINKING = String(process.env.STRIP_THINKING || "false") === "true";
@@ -30,13 +32,16 @@ function sanitizeBody(body) {
   if (STRIP_THINKING) delete clone.thinking;
   if (STRIP_MCP_SERVERS) delete clone.mcp_servers;
   if (STRIP_CONTAINER_FIELD) delete clone.container;
+  // Apply per-model token cap
+  const isSmallModel = SMALL_FAST_MODEL && clone.model === SMALL_FAST_MODEL;
+  const cap = isSmallModel ? SMALL_MAX_TOKENS_CAP : MAX_TOKENS_CAP;
   if (
-    Number.isFinite(MAX_TOKENS_CAP) &&
-    MAX_TOKENS_CAP > 0 &&
+    Number.isFinite(cap) &&
+    cap > 0 &&
     typeof clone.max_tokens === "number" &&
-    clone.max_tokens > MAX_TOKENS_CAP
+    clone.max_tokens > cap
   ) {
-    clone.max_tokens = MAX_TOKENS_CAP;
+    clone.max_tokens = cap;
   }
   return clone;
 }
