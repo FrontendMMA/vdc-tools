@@ -15,7 +15,11 @@ Run Claude Code in Docker with local/remote LLMs via LiteLLM.
 curl -sL https://raw.githubusercontent.com/FrontendMMA/vdc-tools/main/install.sh | bash
 ```
 
-The installer will prompt for your LiteLLM endpoint and API key.
+Then configure your LLM backend:
+
+```bash
+vdc-setup
+```
 
 Requirements: Docker. Git is optional (curl fallback available).
 
@@ -24,20 +28,23 @@ Requirements: Docker. Git is optional (curl fallback available).
 | Command | Description |
 |---------|-------------|
 | `vdc-claude` | Run Claude Code interactively in Docker |
+| `vdc-setup` | Configure LLM backend (URL, token, model) |
 | `vdc-ralphex` | Run ralphex plans in Docker |
 | `vdc-litellm` | Start a local LiteLLM proxy |
 | `vdc-update` | Update vdc-tools and rebuild Docker images |
+
+All commands support `--version` / `-V`.
 
 ## Quick start
 
 ### Remote LiteLLM
 
 ```bash
-# Edit config
-nano ~/.vdc-tools/.env
+# Configure (interactive wizard)
+vdc-setup
 
 # Run Claude Code
-vdc-claude --model Qwen3.5-35B-A3B
+vdc-claude
 ```
 
 ### Local LiteLLM + Ollama
@@ -55,11 +62,12 @@ python3.11 -m venv ~/.vdc-tools/state/litellm-venv
 cp ~/.vdc-tools/state/litellm.config.example.yaml ~/.vdc-tools/state/litellm.config.yaml
 ```
 
-3. Set `.env` for local:
+3. Configure for local:
 
 ```bash
-UPSTREAM_BASE_URL=http://host.docker.internal:4000
-UPSTREAM_TOKEN=ollama
+vdc-setup
+# Set UPSTREAM_BASE_URL to http://host.docker.internal:4000
+# Set UPSTREAM_TOKEN to ollama
 ```
 
 4. Start LiteLLM and run:
@@ -69,13 +77,16 @@ vdc-litellm
 vdc-claude --model qwen3:8b
 ```
 
-## Default model
+## Models
 
-Set `DEFAULT_MODEL` in `~/.vdc-tools/.env` to avoid typing `--model` every time:
+Set in `~/.vdc-tools/.env` or via `vdc-setup`:
 
 ```bash
-DEFAULT_MODEL=Qwen3.5-35B-A3B
+DEFAULT_MODEL=Qwen3.5-35B-A3B       # main model (used with --model)
+SMALL_FAST_MODEL=qwen3:8b            # fast model for background requests
 ```
+
+Claude Code sends background requests (tab completion, file summaries) to `claude-haiku-4-5-20251001`. Set `SMALL_FAST_MODEL` to map these to a fast local model.
 
 ## Usage
 
@@ -175,5 +186,5 @@ vdc-claude / vdc-ralphex
 ## Notes on local models
 
 - `qwen3`-family models work better for tool-use than `llama3`.
-- Claude Code sends background requests to `claude-haiku-4-5-20251001` — map it to a fast local model in LiteLLM config.
+- Set `SMALL_FAST_MODEL` for background requests (see [Models](#models) section).
 - If a model loops in long reasoning, try `MAX_TOKENS_CAP=256` in `.env`.

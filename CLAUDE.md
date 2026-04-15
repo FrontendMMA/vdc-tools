@@ -24,7 +24,7 @@ There are no tests or linters configured in this project.
 bin/                  # Bash CLI entry points (vdc-claude, vdc-ralphex, vdc-litellm, vdc-update)
 proxy/                # Express API proxy (server.js) — sanitizes requests, caps tokens, forwards to upstream LLM
 claude-runner/        # Dockerfile for the Claude CLI container (includes system tools, ralphex, Chromium)
-install.sh            # Unified bash installer — creates ~/.vdc-tools/ structure, symlinks, interactive .env setup
+install.sh            # Unified bash installer — creates ~/.vdc-tools/ structure, symlinks, copies .env template
 examples/             # MCP and LiteLLM config examples
 knowledge/            # Shared read-only knowledge base template
 ```

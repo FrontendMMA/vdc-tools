@@ -62,12 +62,13 @@ prompt_secret() {
 }
 
 # Fetch models from upstream and let user pick one
-# Usage: select_model "base_url" "token" "current_model"
+# Usage: select_model "base_url" "token" "current_model" ["label"]
 # Sets REPLY to selected model name
 select_model() {
   local base_url="$1"
   local token="$2"
   local current="${3:-}"
+  local label="${4:-DEFAULT_MODEL}"
 
   echo ""
   echo "Fetching models from ${base_url}..."
@@ -77,11 +78,11 @@ select_model() {
     -H "Authorization: Bearer ${token}" \
     "${base_url}/v1/models" 2>/dev/null)"; then
     echo "Could not fetch models from ${base_url}"
-    prompt_value "DEFAULT_MODEL (enter manually)" "${current}"
+    prompt_value "${label} (enter manually)" "${current}"
     return
   fi
 
-  # Parse model IDs — try jq first, fall back to python3, then grep
+  # Parse model IDs — try jq first, fall back to python3
   local models
   if command -v jq >/dev/null 2>&1; then
     models="$(echo "${response}" | jq -r '.data[].id' 2>/dev/null)" || models=""
@@ -98,7 +99,7 @@ for m in data.get('data', []):
 
   if [ -z "${models}" ]; then
     echo "No models found in response."
-    prompt_value "DEFAULT_MODEL (enter manually)" "${current}"
+    prompt_value "${label} (enter manually)" "${current}"
     return
   fi
 
@@ -114,9 +115,9 @@ for m in data.get('data', []):
 
   echo ""
   if [ -n "${current}" ]; then
-    printf "Select model [%s]: " "${current}"
+    printf "%s [%s]: " "${label}" "${current}"
   else
-    printf "Select model: "
+    printf "%s: " "${label}"
   fi
   read -r REPLY
 
@@ -136,15 +137,17 @@ echo ""
 CURRENT_URL=""
 CURRENT_TOKEN=""
 CURRENT_MODEL=""
+CURRENT_SMALL_MODEL=""
 
 # Load existing values if editing
 if [ -f "${ENV_FILE}" ]; then
   echo "Editing existing configuration (${ENV_FILE})"
   echo "Press Enter to keep current value."
   echo ""
-  CURRENT_URL="$(grep -m1 '^UPSTREAM_BASE_URL=' "${ENV_FILE}" | cut -d= -f2-)"
-  CURRENT_TOKEN="$(grep -m1 '^UPSTREAM_TOKEN=' "${ENV_FILE}" | cut -d= -f2-)"
-  CURRENT_MODEL="$(grep -m1 '^DEFAULT_MODEL=' "${ENV_FILE}" | cut -d= -f2-)"
+  CURRENT_URL="$(grep -m1 '^UPSTREAM_BASE_URL=' "${ENV_FILE}" | cut -d= -f2- || true)"
+  CURRENT_TOKEN="$(grep -m1 '^UPSTREAM_TOKEN=' "${ENV_FILE}" | cut -d= -f2- || true)"
+  CURRENT_MODEL="$(grep -m1 '^DEFAULT_MODEL=' "${ENV_FILE}" | cut -d= -f2- || true)"
+  CURRENT_SMALL_MODEL="$(grep -m1 '^SMALL_FAST_MODEL=' "${ENV_FILE}" | cut -d= -f2- || true)"
 else
   echo "First-time setup."
   echo ""
@@ -156,17 +159,27 @@ NEW_URL="${REPLY}"
 prompt_secret "UPSTREAM_TOKEN" "${CURRENT_TOKEN}"
 NEW_TOKEN="${REPLY}"
 
-select_model "${NEW_URL}" "${NEW_TOKEN}" "${CURRENT_MODEL}"
+select_model "${NEW_URL}" "${NEW_TOKEN}" "${CURRENT_MODEL}" "DEFAULT_MODEL"
 NEW_MODEL="${REPLY}"
+
+select_model "${NEW_URL}" "${NEW_TOKEN}" "${CURRENT_SMALL_MODEL}" "SMALL_FAST_MODEL"
+NEW_SMALL_MODEL="${REPLY}"
 
 # Write .env
 if [ -f "${ENV_FILE}" ]; then
-  # Edit mode: update only the 3 values in existing file
+  # Edit mode: update values in existing file
   sed -i.bak \
     -e "s|^UPSTREAM_BASE_URL=.*|UPSTREAM_BASE_URL=$(sed_escape "${NEW_URL}")|" \
     -e "s|^UPSTREAM_TOKEN=.*|UPSTREAM_TOKEN=$(sed_escape "${NEW_TOKEN}")|" \
     -e "s|^DEFAULT_MODEL=.*|DEFAULT_MODEL=$(sed_escape "${NEW_MODEL}")|" \
     "${ENV_FILE}"
+  # SMALL_FAST_MODEL may not exist in older .env files — append if missing
+  if grep -q '^SMALL_FAST_MODEL=' "${ENV_FILE}"; then
+    sed -i.bak -e "s|^SMALL_FAST_MODEL=.*|SMALL_FAST_MODEL=$(sed_escape "${NEW_SMALL_MODEL}")|" "${ENV_FILE}"
+    rm -f "${ENV_FILE}.bak"
+  else
+    echo "SMALL_FAST_MODEL=${NEW_SMALL_MODEL}" >> "${ENV_FILE}"
+  fi
   rm -f "${ENV_FILE}.bak"
 else
   # First-time: generate from template
@@ -179,6 +192,7 @@ else
     -e "s|^UPSTREAM_BASE_URL=.*|UPSTREAM_BASE_URL=$(sed_escape "${NEW_URL}")|" \
     -e "s|^UPSTREAM_TOKEN=.*|UPSTREAM_TOKEN=$(sed_escape "${NEW_TOKEN}")|" \
     -e "s|^DEFAULT_MODEL=.*|DEFAULT_MODEL=$(sed_escape "${NEW_MODEL}")|" \
+    -e "s|^SMALL_FAST_MODEL=.*|SMALL_FAST_MODEL=$(sed_escape "${NEW_SMALL_MODEL}")|" \
     "${ENV_EXAMPLE}" > "${ENV_FILE}"
 fi
 
