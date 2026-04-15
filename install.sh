@@ -15,7 +15,8 @@ fi
 # --- Download / update source ---
 if [ -d "${SRC_DIR}/.git" ]; then
   echo "Updating vdc-tools..."
-  git -C "${SRC_DIR}" pull --ff-only 2>/dev/null || true
+  git -C "${SRC_DIR}" fetch origin 2>/dev/null || true
+  git -C "${SRC_DIR}" reset --hard origin/main 2>/dev/null || true
 elif command -v git >/dev/null 2>&1; then
   echo "Installing vdc-tools..."
   git clone --depth 1 "https://github.com/${REPO}.git" "${SRC_DIR}"

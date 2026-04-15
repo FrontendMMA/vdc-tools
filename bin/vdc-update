@@ -10,7 +10,8 @@ fi
 
 if [ -d "${SRC_DIR}/.git" ]; then
   echo "Updating vdc-tools..."
-  git -C "${SRC_DIR}" pull --ff-only
+  git -C "${SRC_DIR}" fetch origin
+  git -C "${SRC_DIR}" reset --hard origin/main
 else
   echo "Repository not found at ${SRC_DIR}. Reinstall:" >&2
   echo "  curl -sL https://raw.githubusercontent.com/FrontendMMA/vdc-tools/main/install.sh | bash" >&2
