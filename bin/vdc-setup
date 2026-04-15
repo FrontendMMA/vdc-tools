@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "${SCRIPT_PATH}" ]; do
+  LINK_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+  SCRIPT_PATH="$(readlink "${SCRIPT_PATH}")"
+  [[ "${SCRIPT_PATH}" != /* ]] && SCRIPT_PATH="${LINK_DIR}/${SCRIPT_PATH}"
+done
+REPO_DIR="$(cd "$(dirname "${SCRIPT_PATH}")/.." && pwd)"
+VDC_ROOT="${VDC_ROOT:-${HOME}/.vdc-tools}"
+ENV_FILE="${VDC_ROOT}/.env"
+ENV_EXAMPLE="${REPO_DIR}/.env.example"
+
+# Escape value for use in sed replacement
+sed_escape() {
+  printf '%s' "$1" | sed 's/[|&\\/]/\\&/g'
+}
+
+# Mask token: show first 3 and last 4 chars
+mask_token() {
+  local t="$1"
+  if [ ${#t} -le 7 ]; then
+    echo "***"
+  else
+    echo "${t:0:3}...${t: -4}"
+  fi
+}
+
+# Prompt with optional default value
+# Usage: prompt_value "LABEL" "current_value"
+# Sets REPLY to the entered or default value
+prompt_value() {
+  local label="$1"
+  local default="${2:-}"
+  if [ -n "${default}" ]; then
+    printf "%s [%s]: " "${label}" "${default}"
+  else
+    printf "%s: " "${label}"
+  fi
+  read -r REPLY
+  REPLY="${REPLY:-${default}}"
+}
+
+# Prompt for secret with optional masked default
+prompt_secret() {
+  local label="$1"
+  local default="${2:-}"
+  if [ -n "${default}" ]; then
+    printf "%s [%s]: " "${label}" "$(mask_token "${default}")"
+  else
+    printf "%s: " "${label}"
+  fi
+  read -rs REPLY
+  echo ""
+  REPLY="${REPLY:-${default}}"
+}
+
+# Fetch models from upstream and let user pick one
+# Usage: select_model "base_url" "token" "current_model"
+# Sets REPLY to selected model name
+select_model() {
+  local base_url="$1"
+  local token="$2"
+  local current="${3:-}"
+
+  echo ""
+  echo "Fetching models from ${base_url}..."
+
+  local response
+  if ! response="$(curl -sf --max-time 5 \
+    -H "Authorization: Bearer ${token}" \
+    "${base_url}/v1/models" 2>/dev/null)"; then
+    echo "Could not fetch models from ${base_url}"
+    prompt_value "DEFAULT_MODEL (enter manually)" "${current}"
+    return
+  fi
+
+  # Parse model IDs — try jq first, fall back to python3, then grep
+  local models
+  if command -v jq >/dev/null 2>&1; then
+    models="$(echo "${response}" | jq -r '.data[].id' 2>/dev/null)" || models=""
+  elif command -v python3 >/dev/null 2>&1; then
+    models="$(echo "${response}" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for m in data.get('data', []):
+    print(m['id'])
+" 2>/dev/null)" || models=""
+  else
+    models=""
+  fi
+
+  if [ -z "${models}" ]; then
+    echo "No models found in response."
+    prompt_value "DEFAULT_MODEL (enter manually)" "${current}"
+    return
+  fi
+
+  echo ""
+  echo "Available models:"
+  local i=1
+  local model_array=()
+  while IFS= read -r m; do
+    model_array+=("${m}")
+    echo "  ${i}) ${m}"
+    i=$((i + 1))
+  done <<< "${models}"
+
+  echo ""
+  if [ -n "${current}" ]; then
+    printf "Select model [%s]: " "${current}"
+  else
+    printf "Select model: "
+  fi
+  read -r REPLY
+
+  if [ -z "${REPLY}" ]; then
+    REPLY="${current}"
+  elif [[ "${REPLY}" =~ ^[0-9]+$ ]] && [ "${REPLY}" -ge 1 ] && [ "${REPLY}" -le "${#model_array[@]}" ]; then
+    REPLY="${model_array[$((REPLY - 1))]}"
+  fi
+  # else: user typed a model name directly, keep REPLY as-is
+}
+
+# --- Main ---
+echo ""
+echo "=== vdc-tools configuration ==="
+echo ""
+
+CURRENT_URL=""
+CURRENT_TOKEN=""
+CURRENT_MODEL=""
+
+# Load existing values if editing
+if [ -f "${ENV_FILE}" ]; then
+  echo "Editing existing configuration (${ENV_FILE})"
+  echo "Press Enter to keep current value."
+  echo ""
+  CURRENT_URL="$(grep -m1 '^UPSTREAM_BASE_URL=' "${ENV_FILE}" | cut -d= -f2-)"
+  CURRENT_TOKEN="$(grep -m1 '^UPSTREAM_TOKEN=' "${ENV_FILE}" | cut -d= -f2-)"
+  CURRENT_MODEL="$(grep -m1 '^DEFAULT_MODEL=' "${ENV_FILE}" | cut -d= -f2-)"
+else
+  echo "First-time setup."
+  echo ""
+fi
+
+prompt_value "UPSTREAM_BASE_URL" "${CURRENT_URL}"
+NEW_URL="${REPLY}"
+
+prompt_secret "UPSTREAM_TOKEN" "${CURRENT_TOKEN}"
+NEW_TOKEN="${REPLY}"
+
+select_model "${NEW_URL}" "${NEW_TOKEN}" "${CURRENT_MODEL}"
+NEW_MODEL="${REPLY}"
+
+# Write .env
+if [ -f "${ENV_FILE}" ]; then
+  # Edit mode: update only the 3 values in existing file
+  sed -i.bak \
+    -e "s|^UPSTREAM_BASE_URL=.*|UPSTREAM_BASE_URL=$(sed_escape "${NEW_URL}")|" \
+    -e "s|^UPSTREAM_TOKEN=.*|UPSTREAM_TOKEN=$(sed_escape "${NEW_TOKEN}")|" \
+    -e "s|^DEFAULT_MODEL=.*|DEFAULT_MODEL=$(sed_escape "${NEW_MODEL}")|" \
+    "${ENV_FILE}"
+  rm -f "${ENV_FILE}.bak"
+else
+  # First-time: generate from template
+  if [ ! -f "${ENV_EXAMPLE}" ]; then
+    echo "Template not found: ${ENV_EXAMPLE}" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "${ENV_FILE}")"
+  sed \
+    -e "s|^UPSTREAM_BASE_URL=.*|UPSTREAM_BASE_URL=$(sed_escape "${NEW_URL}")|" \
+    -e "s|^UPSTREAM_TOKEN=.*|UPSTREAM_TOKEN=$(sed_escape "${NEW_TOKEN}")|" \
+    -e "s|^DEFAULT_MODEL=.*|DEFAULT_MODEL=$(sed_escape "${NEW_MODEL}")|" \
+    "${ENV_EXAMPLE}" > "${ENV_FILE}"
+fi
+
+echo ""
+echo "Configuration saved to ${ENV_FILE}"

@@ -69,8 +69,13 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 if [ ! -f "${ENV_FILE}" ]; then
-  echo "Missing ${ENV_FILE}. Run ./install first."
-  exit 1
+  echo "No configuration found. Starting setup..."
+  echo ""
+  vdc-setup
+  if [ ! -f "${ENV_FILE}" ]; then
+    echo "Setup cancelled. Cannot continue without ${ENV_FILE}."
+    exit 1
+  fi
 fi
 
 set -a

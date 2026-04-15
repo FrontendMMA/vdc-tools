@@ -35,7 +35,7 @@ done
 mkdir -p "${BIN_DIR}"
 
 # --- Create symlinks ---
-for cmd in vdc-claude vdc-litellm vdc-ralphex vdc-update; do
+for cmd in vdc-claude vdc-litellm vdc-ralphex vdc-update vdc-setup; do
   src="${SRC_DIR}/bin/${cmd}"
   dest="${BIN_DIR}/${cmd}"
   if [ -L "${dest}" ] || [ -e "${dest}" ]; then
@@ -44,27 +44,9 @@ for cmd in vdc-claude vdc-litellm vdc-ralphex vdc-update; do
   ln -s "${src}" "${dest}"
 done
 
-# --- Interactive .env setup ---
+# --- Copy .env template if missing ---
 if [ ! -f "${VDC_ROOT}/.env" ]; then
-  echo ""
-  echo "First-time setup. Configure your LLM backend:"
-  echo ""
-
-  printf "UPSTREAM_BASE_URL (e.g. https://litellm.example.com): "
-  read -r UPSTREAM_BASE_URL
-  UPSTREAM_BASE_URL="${UPSTREAM_BASE_URL:-https://your-remote-litellm.example.com}"
-
-  printf "UPSTREAM_TOKEN (API key): "
-  read -r UPSTREAM_TOKEN
-  UPSTREAM_TOKEN="${UPSTREAM_TOKEN:-sk-your-upstream-token}"
-
-  sed \
-    -e "s|UPSTREAM_BASE_URL=.*|UPSTREAM_BASE_URL=${UPSTREAM_BASE_URL}|" \
-    -e "s|UPSTREAM_TOKEN=.*|UPSTREAM_TOKEN=${UPSTREAM_TOKEN}|" \
-    "${SRC_DIR}/.env.example" > "${VDC_ROOT}/.env"
-
-  echo ""
-  echo "Config saved to ${VDC_ROOT}/.env"
+  cp "${SRC_DIR}/.env.example" "${VDC_ROOT}/.env"
 fi
 
 # --- Copy example files ---
@@ -95,8 +77,8 @@ fi
 echo ""
 echo "vdc-tools installed!"
 echo ""
-echo "Commands: vdc-claude, vdc-litellm, vdc-ralphex, vdc-update"
+echo "Commands: vdc-claude, vdc-litellm, vdc-ralphex, vdc-setup, vdc-update"
 echo "Config:   ${VDC_ROOT}/.env"
 echo ""
-echo "Open a new terminal and run:"
+echo "Run 'vdc-setup' to configure your LLM backend, then:"
 echo "  vdc-claude --model Qwen3.5-35B-A3B"
