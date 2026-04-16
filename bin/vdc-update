@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SRC_DIR="${HOME}/.vdc-tools/src"
+VDC_ROOT="${VDC_ROOT:-${HOME}/.vdc-tools}"
+SRC_DIR="${VDC_ROOT}/src"
+ENV_FILE="${VDC_ROOT}/.env"
 
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
   echo "vdc-update $(cat "${SRC_DIR}/VERSION" 2>/dev/null || echo "unknown") (vdc-tools)"
@@ -18,7 +20,25 @@ else
   exit 1
 fi
 
-echo "Removing old Docker image..."
+echo "Removing old runner image..."
 docker rmi vdc-tools-claude-runner:latest 2>/dev/null || true
 
-echo "Done. Image will rebuild on next run."
+echo "Rebuilding proxy..."
+if [ -f "${ENV_FILE}" ]; then
+  set -a
+  source "${ENV_FILE}"
+  set +a
+fi
+# Stub out runner-only variables so compose can parse the full file
+export PROJECT_DIR="${PROJECT_DIR:-/tmp}"
+export PROJECT_CLAUDE_DIR="${PROJECT_CLAUDE_DIR:-/tmp}"
+export KNOWLEDGE_DIR="${KNOWLEDGE_DIR:-/tmp}"
+export MCP_DIR="${MCP_DIR:-/tmp}"
+export PNPM_STORE_DIR="${PNPM_STORE_DIR:-/tmp}"
+export HOST_UID="${HOST_UID:-$(id -u)}"
+export HOST_GID="${HOST_GID:-$(id -g)}"
+export COMPOSE_PROJECT_NAME="vdc-tools"
+docker compose -f "${SRC_DIR}/docker-compose.yml" build proxy
+docker compose -f "${SRC_DIR}/docker-compose.yml" up -d --force-recreate proxy
+
+echo "Done. Runner image will rebuild on next run."

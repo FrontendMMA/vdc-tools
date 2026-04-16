@@ -10,9 +10,9 @@ services:
       UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL}
       UPSTREAM_TOKEN: ${UPSTREAM_TOKEN}
       STRIP_CONTEXT_MANAGEMENT: ${STRIP_CONTEXT_MANAGEMENT:-true}
-      STRIP_THINKING: ${STRIP_THINKING:-false}
-      STRIP_MCP_SERVERS: ${STRIP_MCP_SERVERS:-false}
-      STRIP_CONTAINER_FIELD: ${STRIP_CONTAINER_FIELD:-false}
+      STRIP_THINKING: ${STRIP_THINKING:-true}
+      STRIP_MCP_SERVERS: ${STRIP_MCP_SERVERS:-true}
+      STRIP_CONTAINER_FIELD: ${STRIP_CONTAINER_FIELD:-true}
       MAX_TOKENS_CAP: ${MAX_TOKENS_CAP:-}
       SMALL_MAX_TOKENS_CAP: ${SMALL_MAX_TOKENS_CAP:-}
       SMALL_FAST_MODEL: ${SMALL_FAST_MODEL:-}
@@ -28,6 +28,7 @@ services:
       start_period: 10s
 
   claude-runner:
+    profiles: ["runner"]
     build:
       context: ./claude-runner
       dockerfile: Dockerfile
@@ -58,6 +59,7 @@ services:
     tty: true
 
   ralphex-runner:
+    profiles: ["runner"]
     build:
       context: ./claude-runner
       dockerfile: Dockerfile

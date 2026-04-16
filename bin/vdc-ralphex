@@ -172,7 +172,7 @@ EOF
 fi
 
 compose() {
-  docker compose -f "${REPO_DIR}/docker-compose.yml" "$@"
+  docker compose -f "${REPO_DIR}/docker-compose.yml" --profile runner "$@"
 }
 
 if ! docker ps --filter "name=^vdc-tools-claude-proxy$" --format '{{.Names}}' | grep -qx 'vdc-tools-claude-proxy'; then
