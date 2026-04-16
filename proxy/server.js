@@ -14,9 +14,9 @@ const SMALL_MAX_TOKENS_CAP = Number(process.env.SMALL_MAX_TOKENS_CAP || 0);
 const SMALL_FAST_MODEL = process.env.SMALL_FAST_MODEL || "";
 
 const STRIP_CONTEXT_MANAGEMENT = String(process.env.STRIP_CONTEXT_MANAGEMENT || "true") === "true";
-const STRIP_THINKING = String(process.env.STRIP_THINKING || "false") === "true";
-const STRIP_MCP_SERVERS = String(process.env.STRIP_MCP_SERVERS || "false") === "true";
-const STRIP_CONTAINER_FIELD = String(process.env.STRIP_CONTAINER_FIELD || "false") === "true";
+const STRIP_THINKING = String(process.env.STRIP_THINKING || "true") === "true";
+const STRIP_MCP_SERVERS = String(process.env.STRIP_MCP_SERVERS || "true") === "true";
+const STRIP_CONTAINER_FIELD = String(process.env.STRIP_CONTAINER_FIELD || "true") === "true";
 
 if (!UPSTREAM_BASE_URL) throw new Error("UPSTREAM_BASE_URL is required");
 if (!UPSTREAM_TOKEN) throw new Error("UPSTREAM_TOKEN is required");
@@ -25,13 +25,19 @@ function log(...args) {
   if (LOG_LEVEL !== "silent") console.log(new Date().toISOString(), ...args);
 }
 
+function debug(...args) {
+  if (LOG_LEVEL === "debug") console.log(new Date().toISOString(), "[debug]", ...args);
+}
+
 function sanitizeBody(body) {
   if (!body || typeof body !== "object") return body;
   const clone = structuredClone(body);
-  if (STRIP_CONTEXT_MANAGEMENT) delete clone.context_management;
-  if (STRIP_THINKING) delete clone.thinking;
-  if (STRIP_MCP_SERVERS) delete clone.mcp_servers;
-  if (STRIP_CONTAINER_FIELD) delete clone.container;
+  const stripped = [];
+  if (STRIP_CONTEXT_MANAGEMENT && clone.context_management) { delete clone.context_management; stripped.push("context_management"); }
+  if (STRIP_THINKING && clone.thinking) { delete clone.thinking; stripped.push("thinking"); }
+  if (STRIP_MCP_SERVERS && clone.mcp_servers) { delete clone.mcp_servers; stripped.push("mcp_servers"); }
+  if (STRIP_CONTAINER_FIELD && clone.container) { delete clone.container; stripped.push("container"); }
+  if (stripped.length) debug("stripped fields:", stripped.join(", "));
   // Apply per-model token cap
   const isSmallModel = SMALL_FAST_MODEL && clone.model === SMALL_FAST_MODEL;
   const cap = isSmallModel ? SMALL_MAX_TOKENS_CAP : MAX_TOKENS_CAP;
@@ -90,14 +96,24 @@ async function proxyRequest(req, res, upstreamPath) {
   try {
     const body = sanitizeBody(req.body);
     const url = new URL(upstreamPath, UPSTREAM_BASE_URL).toString();
-    log(req.method, upstreamPath, "model=", body?.model, "stream=", body?.stream === true);
+    const jsonBody = JSON.stringify(body);
+    const bodyKB = (Buffer.byteLength(jsonBody) / 1024).toFixed(1);
+    const msgCount = Array.isArray(body?.messages) ? body.messages.length : 0;
+    const sysLen = typeof body?.system === "string" ? body.system.length
+      : Array.isArray(body?.system) ? JSON.stringify(body.system).length : 0;
+    log(req.method, upstreamPath, "model=", body?.model, "stream=", body?.stream === true,
+      `body=${bodyKB}KB msgs=${msgCount} sys=${(sysLen / 1024).toFixed(1)}KB max_tokens=${body?.max_tokens ?? "?"}`);
+    debug("request keys:", Object.keys(body || {}).join(", "));
 
+    const t0 = Date.now();
     const upstream = await fetch(url, {
       method: req.method,
       headers: buildHeaders(req),
-      body: JSON.stringify(body),
+      body: jsonBody,
       signal: controller.signal,
     });
+    const ttfb = Date.now() - t0;
+    log(req.method, upstreamPath, `upstream=${upstream.status} ttfb=${ttfb}ms`);
 
     res.status(upstream.status);
 
